@@ -1,0 +1,18 @@
+package PlayerApi
+
+import LinkedList
+
+public constant players      = new LinkedList<player>()
+public constant redPlayers   = new LinkedList<player>()
+public constant greenPlayers = new LinkedList<player>()
+
+init
+    for i = 0 to bj_MAX_PLAYERS
+        let p = Player(i)
+        if p.getSlotState() == PLAYER_SLOT_STATE_PLAYING
+            players.push(p)
+
+            if i == 0 or p.isAllyOf(Player(0))
+                redPlayers.push(p)
+            else
+                greenPlayers.push(p)

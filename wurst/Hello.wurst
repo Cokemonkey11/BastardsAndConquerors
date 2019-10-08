@@ -1,0 +1,151 @@
+package Hello
+
+import AbilityObjEditing
+import Assets
+import ClosureEvents
+import ClosureForGroups
+import LinkedListModule
+import ObjectIds
+import PlayerApi
+import UnitAnimations
+
+constant ID_LAVASPAWN = 'Hlsp'
+constant ID_SKARCHER  = 'Harc'
+
+constant ID_LAVAMISSILE   = 'Alvm'
+constant ID_ARCHERMISSILE = 'Aarm'
+
+interface DestrIface
+	function check_destr(Missile m) returns bool
+
+class Missile
+	use LinkedListModule
+
+	static constant clock = CreateTimer()
+
+	unit owner
+	vec3 vel
+	vec3 accel
+	effect mdl
+	DestrIface des
+
+	ondestroy
+		destroy des
+		mdl.destr()
+
+	construct(unit owner, string path, vec3 start, vec3 vel, vec3 accel, DestrIface des)
+		this.owner = owner
+		this.vel = vel
+		this.accel = accel
+		this.mdl = addEffect(path, start)
+		this.des = des
+
+		if size == 1
+			print("!")
+			clock.startPeriodic(ANIMATION_PERIOD) ->
+				let iter = iterator()
+				while iter.hasNext()
+					let missile = iter.next()
+
+					missile.vel += missile.accel
+
+					missile.mdl.setPos(missile.mdl.getPos3() + missile.vel)
+
+					if missile.des.check_destr(missile)
+						destroy missile
+
+				if size == 0
+					print("?")
+					clock.pause()
+
+function string.colored(colorA c) returns string
+	return c.toColorString() + this + "|r"
+
+class LavaSpawn extends HeroDefinition
+	construct(int id)
+		super(id, 'Hpal')
+		setModelFile(Units.lavaSpawn)
+		setIconGameInterface(Icons.bTNLavaSpawn)
+		setUnitSoundSet("LavaSpawn")
+		setAttacksEnabled(0)
+		setProperNames("Pokemon")
+		setProperNamesUsed(1)
+		setHeroAbilities("")
+		setSightRadiusNight(1000)
+		setName("Champion")
+		setNormalAbilities(commaList(ID_LAVAMISSILE))
+
+class Skarcher extends LavaSpawn
+	construct(int id)
+		super(id)
+		setModelFile(Units.skeletonArcher1)
+		setIconGameInterface(Icons.bTNSkeletonArcher)
+		setUnitSoundSet("SkeletonArcher")
+
+class LavaMissile extends AbilityDefinitionIllidanChannel
+	construct(int id)
+		super(id)
+		presetArtDuration(int lvl -> 0.)
+		presetDisableOtherAbilities(int lvl -> false)
+		presetFollowThroughTime(int lvl -> 0.)
+		presetTargetType(int lvl -> 2)  // Point target
+		presetOptions(int lvl -> 1)     // Visible
+		setName("Missile")
+		presetTooltipNormal(int lvl -> "Loose Missile - " + "Q".colored(COLOR_GOLD))
+		presetTooltipNormalExtended(int lvl -> "Launch a projectile in the target direction, which deals damage on-hit.")
+		setIconNormal(Icons.bTNPoisonArrow)
+		presetCooldown(lvl int -> 2.5)
+		setButtonPositionNormalX(0)
+		setButtonPositionNormalY(2)
+		setHotkeyNormal("Q")
+		presetCastRange(int lvl -> 1000.)
+		setArtTarget("")
+		setArtCaster("")
+		setArtEffect("")
+
+@compiletime function gen()
+	new LavaSpawn(ID_LAVASPAWN)
+	new Skarcher(ID_SKARCHER)
+	
+	new LavaMissile(ID_LAVAMISSILE)
+
+
+class BoolRef
+	bool val
+
+	construct(bool val)
+		this.val = val
+
+init
+	redPlayers.forEach() (player t) ->
+		t.selectSingle(createUnit(t, ID_LAVASPAWN, t.getStartLocation(), angle(3. * PI / 2.)))
+
+	greenPlayers.forEach() (player t) ->
+		t.selectSingle(createUnit(t, ID_SKARCHER, t.getStartLocation(), angle(3. * PI / 2.)))
+
+	StopMusic(false)
+
+	registerSpellEffectEvent(ID_LAVAMISSILE) ->
+		let caster = EventData.getTriggerUnit()
+
+		caster.setAnimation(UnitAnimations.LavaSpawn.attack.idx)
+		caster.queueAnimation("stand")
+
+		new Missile(
+			caster,
+			Abilities.lavaSpawnMissile,
+			caster.getPos3with(50.).offset2d(caster.getFacingAngle(), 50.),
+			ANIMATION_PERIOD * 1300. * caster.getPos().normalizedPointerTo(EventData.getSpellTargetPos()).toVec3(),
+			vec3(0., 0., -0.1)
+		) m ->
+			let ref = new BoolRef(m.mdl.getPos3().z < 0.)
+
+			forUnitsInRange(m.mdl.getPos(), 64.) (unit u) ->
+				if u.isEnemyOf(m.owner)
+					m.owner.damageTarget(u, 50.)
+					ref.val = true
+			
+			let result = ref.val
+			destroy ref
+
+			return result
