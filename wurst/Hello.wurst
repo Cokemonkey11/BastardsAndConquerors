@@ -4,16 +4,24 @@ import AbilityObjEditing
 import Assets
 import ClosureEvents
 import ClosureForGroups
+import GameTimer
+import HashMap
 import LinkedListModule
 import ObjectIds
 import PlayerApi
 import UnitAnimations
+import WurstSimError
 
 constant ID_LAVASPAWN = 'Hlsp'
 constant ID_SKARCHER  = 'Harc'
+constant ID_LMANIP    = 'Hlmn'
+constant ID_SKMANIP   = 'Hsmn'
+constant ID_INDICATOR = 'Hind'
 
 constant ID_LAVAMISSILE   = 'Alvm'
 constant ID_ARCHERMISSILE = 'Aarm'
+
+constant SAFE_LOC = vec2(-3585., 3585.)
 
 interface DestrIface
 	function check_destr(Missile m) returns bool
@@ -41,7 +49,6 @@ class Missile
 		this.des = des
 
 		if size == 1
-			print("!")
 			clock.startPeriodic(ANIMATION_PERIOD) ->
 				let iter = iterator()
 				while iter.hasNext()
@@ -55,7 +62,6 @@ class Missile
 						destroy missile
 
 				if size == 0
-					print("?")
 					clock.pause()
 
 function string.colored(colorA c) returns string
@@ -72,8 +78,10 @@ class LavaSpawn extends HeroDefinition
 		setProperNamesUsed(1)
 		setHeroAbilities("")
 		setSightRadiusNight(1000)
-		setName("Champion")
+		setName("Executor")
 		setNormalAbilities(commaList(ID_LAVAMISSILE))
+		setAnimationCastBackswing(0.)
+		setAnimationCastPoint(0.)
 
 class Skarcher extends LavaSpawn
 	construct(int id)
@@ -81,6 +89,35 @@ class Skarcher extends LavaSpawn
 		setModelFile(Units.skeletonArcher1)
 		setIconGameInterface(Icons.bTNSkeletonArcher)
 		setUnitSoundSet("SkeletonArcher")
+
+class Indicator extends LavaSpawn
+	construct(int id)
+		super(id)
+		setModelFile("none.mdl")
+		setIconGameInterface(Icons.bTNWindWalkOff)
+		setHitPointsMaximumBase(100)
+		setStrengthPerLevel(0)
+		setStartingStrength(0)
+		setHitPointsRegenerationRate(10.)
+		setManaMaximum(0)
+		setIntelligencePerLevel(0)
+		setStartingIntelligence(0)
+
+class LavaManipulator extends LavaSpawn
+	construct(int id)
+		super(id)
+		setModelFile(Units.demoness1)
+		setIconGameInterface(Icons.bTNDemoness)
+		setUnitSoundSet("Demoness")
+		setName("Manipulator")
+		setNormalAbilities(commaList(""))
+
+class SkeletonManipulator extends LavaManipulator
+	construct(int id)
+		super(id)
+		setModelFile(Units.skeletonOrc1)
+		setIconGameInterface(Icons.bTNSkeletalOrcChampion)
+		setUnitSoundSet("Skeleton")
 
 class LavaMissile extends AbilityDefinitionIllidanChannel
 	construct(int id)
@@ -98,14 +135,20 @@ class LavaMissile extends AbilityDefinitionIllidanChannel
 		setButtonPositionNormalX(0)
 		setButtonPositionNormalY(2)
 		setHotkeyNormal("Q")
-		presetCastRange(int lvl -> 1000.)
+		presetCastRange(int lvl -> 2000.)
 		setArtTarget("")
 		setArtCaster("")
 		setArtEffect("")
+		presetCastingTime(lvl -> 0.)
 
 @compiletime function gen()
 	new LavaSpawn(ID_LAVASPAWN)
 	new Skarcher(ID_SKARCHER)
+
+	new LavaManipulator(ID_LMANIP)
+	new SkeletonManipulator(ID_SKMANIP)
+
+	new Indicator(ID_INDICATOR)
 	
 	new LavaMissile(ID_LAVAMISSILE)
 
@@ -116,14 +159,88 @@ class BoolRef
 	construct(bool val)
 		this.val = val
 
+class SelectData
+	unit which
+	real when
+	unit indicator
+
+	construct(unit which, unit indicator)
+		this.which = which
+		this.when = -10.
+		this.indicator = indicator
+
+function unit.hideish()
+	this..setXY(SAFE_LOC)
+		..setVertexColor(colorA(255, 255, 255, 0))
+		..setInvulnerable(true)
+		..pause()
+
+function unit.showish(vec2 where)
+	this..setXY(where)
+		..setVertexColor(colorA(255, 255, 255, 255))
+		..setInvulnerable(false)
+		..unpause()
+
+let activeHeroes = new HashMap<player, SelectData>()
+
 init
 	redPlayers.forEach() (player t) ->
-		t.selectSingle(createUnit(t, ID_LAVASPAWN, t.getStartLocation(), angle(3. * PI / 2.)))
+		let u = createUnit(t, ID_LAVASPAWN, t.getStartLocation(), angle(3. * PI / 2.))
+		t.selectSingle(u)
+		createUnit(t, ID_LMANIP, ZERO2, angle(0.))..hideish()
+		activeHeroes.put(t, new SelectData(u, createUnit(t, ID_INDICATOR, ZERO2, angle(0.))..hideish()))
 
 	greenPlayers.forEach() (player t) ->
-		t.selectSingle(createUnit(t, ID_SKARCHER, t.getStartLocation(), angle(3. * PI / 2.)))
+		let u = createUnit(t, ID_SKARCHER, t.getStartLocation(), angle(3. * PI / 2.))
+		t.selectSingle(u)
+		createUnit(t, ID_SKMANIP, ZERO2, angle(0.))..hideish()
+		activeHeroes.put(t, new SelectData(u, createUnit(t, ID_INDICATOR, ZERO2, angle(0.))..hideish()))
 
 	StopMusic(false)
+
+	registerPlayerUnitEvent(EVENT_PLAYER_HERO_REVIVABLE) ->
+		GetTriggerPlayer().selectSingle(
+			GetTriggerUnit()..revive(GetTriggerUnit().getOwner().getStartLocation(), true)
+		)
+
+	addEffect(Buildings.circleOfPower1, ZERO2.polarOffset(angle(5. * PI / 4),  2000.))
+		..setColor(color(100, 0, 0))
+		..setScale(2.)
+	addEffect(Buildings.circleOfPower1, ZERO2.polarOffset(angle(5. * PI / 4), -2000.))
+		..setColor(color(0, 100, 0))
+		..setScale(2.)
+
+	registerPlayerUnitEvent(EVENT_PLAYER_UNIT_SELECTED) ->
+		let u = GetTriggerUnit()
+		let p = GetTriggerPlayer()
+
+		if u.isType(UNIT_TYPE_HERO) and u.getOwner() == p
+			let data = activeHeroes.get(p)
+
+			if u != data.which
+				let now = getElapsedGameTime()
+
+				if u.getTypeId() == ID_INDICATOR or not data.which.isAlive()
+					p.selectSingle(data.which)
+
+				if now > data.when + 10.
+					p.selectSingle(u)
+					let pos = data.which.getPos()
+					let face = data.which.getFacingAngle()
+
+					data.which.hideish()
+
+					data.indicator.setHP(0.5)
+
+					data.which = u
+					data.when = now
+
+					u..showish(pos)..setFacing(face)
+
+					flashEffect(Abilities.charmTarget, pos)
+				else
+					p.selectSingle(data.which)
+					simError(p, "On cooldown (" + (10. + data.when - now).toString(1) + ")")
 
 	registerSpellEffectEvent(ID_LAVAMISSILE) ->
 		let caster = EventData.getTriggerUnit()
@@ -134,15 +251,15 @@ init
 		new Missile(
 			caster,
 			Abilities.lavaSpawnMissile,
-			caster.getPos3with(50.).offset2d(caster.getFacingAngle(), 50.),
-			ANIMATION_PERIOD * 1300. * caster.getPos().normalizedPointerTo(EventData.getSpellTargetPos()).toVec3(),
-			vec3(0., 0., -0.1)
+			caster.getPos3with(60.).offset2d(caster.getFacingAngle(), 50.),
+			ANIMATION_PERIOD * 1400. * caster.getPos().normalizedPointerTo(EventData.getSpellTargetPos()).toVec3(),
+			vec3(0., 0., -0.2)
 		) m ->
 			let ref = new BoolRef(m.mdl.getPos3().z < 0.)
 
 			forUnitsInRange(m.mdl.getPos(), 64.) (unit u) ->
 				if u.isEnemyOf(m.owner)
-					m.owner.damageTarget(u, 50.)
+					m.owner.damageTarget(u, 150.)
 					ref.val = true
 			
 			let result = ref.val
