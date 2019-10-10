@@ -3,6 +3,7 @@ package Hello
 import AbilityObjEditing
 import Assets
 import ClosureEvents
+import ClosureTimers
 import ClosureForGroups
 import GameTimer
 import HashMap
@@ -19,13 +20,20 @@ constant ID_LMANIP    = 'Hlmn'
 constant ID_SKMANIP   = 'Hsmn'
 constant ID_INDICATOR = 'Hind'
 
-constant ID_LAVAMISSILE   = 'Alvm'
-constant ID_ARCHERMISSILE = 'Aarm'
-constant ID_MANIPULATE = 'Amni'
+constant ID_LAVAMISSILE   = 'Zlvm'
+constant ID_ARCHERMISSILE = 'Zarm'
+constant ID_MANIPULATE = 'Zmni'
+constant ID_FREEZE     = 'Zfrz'
+constant ID_UNSUMMON   = 'Zuns'
 
+constant ID_FLAG = 'flag'
 constant ID_LEGO = 'lego'
 
+constant ID_WALL = 'wall'
+
 constant SAFE_LOC = vec2(-3585., 3585.)
+
+constant BASE_RADIUS = 128. + 16.
 
 interface DestrIface
 	function check_destr(Missile m) returns bool
@@ -54,7 +62,7 @@ class Missile
 
 		if size == 1
 			clock.startPeriodic(ANIMATION_PERIOD) ->
-				let iter = iterator()
+				let iter = staticItr()
 				while iter.hasNext()
 					let missile = iter.next()
 
@@ -68,8 +76,54 @@ class Missile
 				if size == 0
 					clock.pause()
 
+class UnsummonChan
+	use LinkedListModule
 
-let activeHeroes = new HashMap<player, SelectData>()
+	static constant clock = CreateTimer()
+
+	unit owner
+	unit target
+	int order
+	effect fx
+
+	ondestroy
+		this.fx.destr()
+
+	construct(unit owner, unit target, int order)
+		this.owner = owner
+		this.target = target
+		this.order = order
+		this.fx = addEffect(Abilities.unsummonTarget, target.getPos())
+
+		if size == 1
+			clock.startPeriodic(ANIMATION_PERIOD) ->
+				let iter = staticItr()
+				while iter.hasNext()
+					let inst = iter.next()
+
+					let tick = inst.target.getMaxHP() * ANIMATION_PERIOD / 10.
+
+					if inst.target.getHP() < tick + 1.
+						let pos = inst.target.getPos()
+						flashEffect(Abilities.lightningShieldTarget, pos)
+						inst.target.remove()
+						inst.target = null
+						createItem(ID_LEGO, pos)
+					else
+						inst.target.subHP(tick)
+
+					if inst.target == null or inst.owner.getCurrentOrder() != inst.order
+						destroy inst
+
+				if size == 0
+					clock.pause()
+
+
+constant activeHeroes = new HashMap<player, SelectData>()
+constant flag_provenence = new HashMap<item, effect>()
+
+constant red_base = genBase(ZERO2.polarOffset(angle(5. * PI / 4),  2000.), color(100, 0, 0))
+constant grn_base = genBase(ZERO2.polarOffset(angle(5. * PI / 4), -2000.), color(0, 100, 0))
 
 class Manipulate
 	use LinkedListModule
@@ -80,18 +134,59 @@ class Manipulate
 	item manipulated
 	real dist
 
+	ondestroy
+		owner..removeAbility(ID_FREEZE)..addAbility(ID_MANIPULATE)
+
+	static function freeze(unit u)
+		let iter = staticItr()
+		while iter.hasNext()
+			let inst = iter.next()
+
+			if inst.owner == u
+				let pos = inst.manipulated.getPos()
+
+				if pos.distanceToSq(red_base.getPos()) < BASE_RADIUS * BASE_RADIUS or pos.distanceToSq(grn_base.getPos()) < BASE_RADIUS * BASE_RADIUS
+					simError(inst.owner.getOwner(), "Can't freeze there")
+				else
+					inst.manipulated.remove()
+					createUnit(Player(PLAYER_NEUTRAL_PASSIVE), ID_WALL, pos, angle(3. * PI / 2.))
+					destroy inst
+
+		if size == 0
+			clock.pause()
+
 	construct(unit owner, item manipulated)
 		this.owner = owner
 		this.manipulated = manipulated
 		this.dist = owner.getPos().distanceTo(manipulated.getPos())
+		owner..removeAbility(ID_MANIPULATE)
+
+		if manipulated.getTypeId() != ID_FLAG
+			owner.addAbility(ID_FREEZE)
 
 		if size == 1
 			clock.startPeriodic(ANIMATION_PERIOD) ->
-				let iter = iterator()
+				let iter = staticItr()
 				while iter.hasNext()
 					let instance = iter.next()
+					let home = activeHeroes.get(instance.owner.getOwner()).homebase
 
-					if not instance.manipulated.isAlive() or not instance.owner.isAlive() or activeHeroes.get(instance.owner.getOwner()).which != instance.owner
+					if (
+						instance.manipulated.getTypeId() == ID_FLAG
+						and flag_provenence.get(instance.manipulated) != home
+						and instance.manipulated.getPos().distanceToSq(home.getPos()) < BASE_RADIUS * BASE_RADIUS
+					)
+						instance.owner..setInvulnerable(true)..pause()
+						flashEffect(Abilities.lightningBoltMissile, instance.manipulated.getPos())
+						flashEffect(Abilities.resurrectcaster, instance.manipulated.getPos())
+						print((home == red_base ? "Red".colored(COLOR_GOLD) : "Green".colored(COLOR_GOLD)) + " team victorious!")
+						destroy instance
+						doAfter(10.) ->
+							(home == red_base ? red_players : green_players).forEach() p ->
+								RemovePlayer(p, PLAYER_GAME_RESULT_VICTORY)
+							EndGame(true)
+
+					else if not instance.manipulated.isAlive() or not instance.owner.isAlive() or activeHeroes.get(instance.owner.getOwner()).which != instance.owner
 						destroy instance
 					else
 						instance.manipulated.setPos(
@@ -100,6 +195,15 @@ class Manipulate
 
 function string.colored(colorA c) returns string
 	return c.toColorString() + this + "|r"
+
+
+class Wall extends UnitDefinition
+	construct(int id)
+		super(id, 'hmtt')
+		setAttacksEnabled(0)
+		setSpeedBase(0)
+		setModelFile(Buildings.towerDefenseTower)
+		setName("Wallerino")
 
 class LavaSpawn extends HeroDefinition
 	construct(int id)
@@ -144,7 +248,7 @@ class LavaManipulator extends LavaSpawn
 		setIconGameInterface(Icons.bTNDemoness)
 		setUnitSoundSet("Demoness")
 		setName("Manipulator")
-		setNormalAbilities(commaList(ID_MANIPULATE))
+		setNormalAbilities(commaList(ID_MANIPULATE, ID_UNSUMMON))
 
 class SkeletonManipulator extends LavaManipulator
 	construct(int id)
@@ -178,13 +282,37 @@ class LavaMissile extends AbilityDefinitionIllidanChannel
 class ManipulateItem extends LavaMissile
 	construct(int id)
 		super(id)
-		presetTargetType(int lvl -> 1) // Unit target.
+		presetTargetType(int lvl -> 1)  // Unit target.
 		setName("Manipulate")
 		presetTooltipNormal(int lvl -> "Manipulate - " + "Q".colored(COLOR_GOLD))
 		presetTooltipNormalExtended(int lvl -> "Take control of a target item.")
 		setIconNormal(Icons.bTNGlove)
-		presetCastRange(int lvl -> 200.)
+		presetCastRange(int lvl -> 196.)
 		presetTargetsAllowed(leve -> "item")
+
+class Unsummon extends ManipulateItem
+	construct(int id)
+		super(id)
+		setOrderStringUseTurnOn("acidbomb")
+		presetBaseOrderID(int lvl -> "acidbomb")
+		presetTargetType(int lvl -> 1)  // Unit target.
+		setName("Unsummon")
+		presetTooltipNormal(int lvl -> "Unsummon - " + "W".colored(COLOR_GOLD))
+		presetTooltipNormalExtended(int lvl -> "Deconstruct a wall while channeling.")
+		setIconNormal(Icons.bTNUnsummonBuilding)
+		setHotkeyNormal("W")
+		presetFollowThroughTime(int lvl -> 10.)
+		presetTargetsAllowed(int lvl -> "neutral")
+		setButtonPositionNormalX(1)
+
+class FreezeItem extends ManipulateItem
+	construct(int id)
+		super(id)
+		presetTargetType(int lvl -> 0)  // No target.
+		setName("Freeze")
+		presetTooltipNormal(int lvl -> "Freeze - " + "Q".colored(COLOR_GOLD))
+		presetTooltipNormalExtended(int lvl -> "Freeze this item into a structure.")
+		setIconNormal(Icons.bTNSpellSteal)
 
 class Manipulatable extends ItemDefinition
 	construct(int id)
@@ -192,6 +320,12 @@ class Manipulatable extends ItemDefinition
 		setName("Lego")
 		setDescription("Manipulatable")
 
+class Flag extends Manipulatable
+	construct(int id)
+		super(id)
+		setName("Flag")
+		setDescription("What a flag")
+		setModelUsed(Objects.humanCaptureFlag)
 
 @compiletime function gen()
 	new LavaSpawn(ID_LAVASPAWN)
@@ -205,7 +339,12 @@ class Manipulatable extends ItemDefinition
 	new LavaMissile(ID_LAVAMISSILE)
 	new ManipulateItem(ID_MANIPULATE)
 
+	new Flag(ID_FLAG)
 	new Manipulatable(ID_LEGO)
+	new FreezeItem(ID_FREEZE)
+	new Unsummon(ID_UNSUMMON)
+
+	new Wall(ID_WALL)
 
 
 class BoolRef
@@ -218,11 +357,13 @@ class SelectData
 	unit which
 	real when
 	unit indicator
+	effect homebase
 
-	construct(unit which, unit indicator)
+	construct(unit which, unit indicator, effect homebase)
 		this.which = which
 		this.when = -10.
 		this.indicator = indicator
+		this.homebase = homebase
 
 function unit.hideish()
 	this..setXY(SAFE_LOC)
@@ -236,26 +377,32 @@ function unit.showish(vec2 where)
 		..setInvulnerable(false)
 		..unpause()
 
-function genBase(vec2 pos, color kolor)
-	addEffect(Buildings.circleOfPower1, pos)
+function genBase(vec2 pos, color kolor) returns effect
+	let fx = addEffect(Buildings.circleOfPower1, pos)
 		..setColor(kolor)
-		..setScale(2.)
+		..setScale(2.5)
 	
-	for _i = 0 to 9
-		createItem(ID_LEGO, pos)
+	let count = 20
+	for i = 0 to (count - 1)
+		createItem(ID_LEGO, pos.polarOffset(angle(2. * i * PI / count), BASE_RADIUS))
+	flag_provenence.put(createItem(ID_FLAG, pos), fx)
+
+	return fx
 
 init
-	redPlayers.forEach() (player t) ->
+	SetTimeOfDayScale(0.)
+
+	red_players.forEach() (player t) ->
 		let u = createUnit(t, ID_LAVASPAWN, t.getStartLocation(), angle(3. * PI / 2.))
 		t.selectSingle(u)
 		createUnit(t, ID_LMANIP, ZERO2, angle(0.))..hideish()
-		activeHeroes.put(t, new SelectData(u, createUnit(t, ID_INDICATOR, ZERO2, angle(0.))..hideish()))
+		activeHeroes.put(t, new SelectData(u, createUnit(t, ID_INDICATOR, ZERO2, angle(0.))..hideish(), red_base))
 
-	greenPlayers.forEach() (player t) ->
+	green_players.forEach() (player t) ->
 		let u = createUnit(t, ID_SKARCHER, t.getStartLocation(), angle(3. * PI / 2.))
 		t.selectSingle(u)
 		createUnit(t, ID_SKMANIP, ZERO2, angle(0.))..hideish()
-		activeHeroes.put(t, new SelectData(u, createUnit(t, ID_INDICATOR, ZERO2, angle(0.))..hideish()))
+		activeHeroes.put(t, new SelectData(u, createUnit(t, ID_INDICATOR, ZERO2, angle(0.))..hideish(), grn_base))
 
 	StopMusic(false)
 
@@ -263,9 +410,6 @@ init
 		GetTriggerPlayer().selectSingle(
 			GetTriggerUnit()..revive(GetTriggerUnit().getOwner().getStartLocation(), true)
 		)
-
-	genBase(ZERO2.polarOffset(angle(5. * PI / 4),  2000.), color(100, 0, 0))
-	genBase(ZERO2.polarOffset(angle(5. * PI / 4), -2000.), color(0, 100, 0))
 
 	registerPlayerUnitEvent(EVENT_PLAYER_UNIT_SELECTED) ->
 		let u = GetTriggerUnit()
@@ -307,6 +451,15 @@ init
 
 		new Manipulate(caster, GetSpellTargetItem())
 
+	registerSpellEffectEvent(ID_UNSUMMON) ->
+		new UnsummonChan(GetTriggerUnit(), GetSpellTargetUnit(), OrderId("acidbomb"))
+
+	registerSpellEffectEvent(ID_FREEZE) ->
+		let caster = EventData.getTriggerUnit()
+		caster..setAnimation("spell")..queueAnimation("stand")
+
+		Manipulate.freeze(caster)
+
 	registerSpellEffectEvent(ID_LAVAMISSILE) ->
 		let caster = EventData.getTriggerUnit()
 
@@ -323,8 +476,10 @@ init
 			let ref = new BoolRef(m.mdl.getPos3().z < 0.)
 
 			forUnitsInRange(m.mdl.getPos(), 64.) (unit u) ->
-				if u.isEnemyOf(m.owner)
-					m.owner.damageTarget(u, 150.)
+				let neutral = u.getOwner() == Player(PLAYER_NEUTRAL_PASSIVE)
+
+				if u.isEnemyOf(m.owner) or neutral
+					m.owner.damageTarget(u, neutral ? min(50., u.getHP() - 1) : 150.)
 					ref.val = true
 			
 			let result = ref.val
