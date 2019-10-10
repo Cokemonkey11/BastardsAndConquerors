@@ -6,6 +6,7 @@ import ClosureEvents
 import ClosureForGroups
 import GameTimer
 import HashMap
+import ItemObjEditing
 import LinkedListModule
 import ObjectIds
 import PlayerApi
@@ -20,6 +21,9 @@ constant ID_INDICATOR = 'Hind'
 
 constant ID_LAVAMISSILE   = 'Alvm'
 constant ID_ARCHERMISSILE = 'Aarm'
+constant ID_MANIPULATE = 'Amni'
+
+constant ID_LEGO = 'lego'
 
 constant SAFE_LOC = vec2(-3585., 3585.)
 
@@ -63,6 +67,36 @@ class Missile
 
 				if size == 0
 					clock.pause()
+
+
+let activeHeroes = new HashMap<player, SelectData>()
+
+class Manipulate
+	use LinkedListModule
+
+	static constant clock = CreateTimer()
+
+	unit owner
+	item manipulated
+	real dist
+
+	construct(unit owner, item manipulated)
+		this.owner = owner
+		this.manipulated = manipulated
+		this.dist = owner.getPos().distanceTo(manipulated.getPos())
+
+		if size == 1
+			clock.startPeriodic(ANIMATION_PERIOD) ->
+				let iter = iterator()
+				while iter.hasNext()
+					let instance = iter.next()
+
+					if not instance.manipulated.isAlive() or not instance.owner.isAlive() or activeHeroes.get(instance.owner.getOwner()).which != instance.owner
+						destroy instance
+					else
+						instance.manipulated.setPos(
+							instance.owner.getPos().polarOffset(instance.owner.getFacingAngle(), instance.dist)
+						)
 
 function string.colored(colorA c) returns string
 	return c.toColorString() + this + "|r"
@@ -110,7 +144,7 @@ class LavaManipulator extends LavaSpawn
 		setIconGameInterface(Icons.bTNDemoness)
 		setUnitSoundSet("Demoness")
 		setName("Manipulator")
-		setNormalAbilities(commaList(""))
+		setNormalAbilities(commaList(ID_MANIPULATE))
 
 class SkeletonManipulator extends LavaManipulator
 	construct(int id)
@@ -125,8 +159,8 @@ class LavaMissile extends AbilityDefinitionIllidanChannel
 		presetArtDuration(int lvl -> 0.)
 		presetDisableOtherAbilities(int lvl -> false)
 		presetFollowThroughTime(int lvl -> 0.)
-		presetTargetType(int lvl -> 2)  // Point target
-		presetOptions(int lvl -> 1)     // Visible
+		presetTargetType(int lvl -> 2)  // Point target.
+		presetOptions(int lvl -> 1)     // Visible.
 		setName("Missile")
 		presetTooltipNormal(int lvl -> "Loose Missile - " + "Q".colored(COLOR_GOLD))
 		presetTooltipNormalExtended(int lvl -> "Launch a projectile in the target direction, which deals damage on-hit.")
@@ -141,6 +175,24 @@ class LavaMissile extends AbilityDefinitionIllidanChannel
 		setArtEffect("")
 		presetCastingTime(lvl -> 0.)
 
+class ManipulateItem extends LavaMissile
+	construct(int id)
+		super(id)
+		presetTargetType(int lvl -> 1) // Unit target.
+		setName("Manipulate")
+		presetTooltipNormal(int lvl -> "Manipulate - " + "Q".colored(COLOR_GOLD))
+		presetTooltipNormalExtended(int lvl -> "Take control of a target item.")
+		setIconNormal(Icons.bTNGlove)
+		presetCastRange(int lvl -> 200.)
+		presetTargetsAllowed(leve -> "item")
+
+class Manipulatable extends ItemDefinition
+	construct(int id)
+		super(id, 'crys')
+		setName("Lego")
+		setDescription("Manipulatable")
+
+
 @compiletime function gen()
 	new LavaSpawn(ID_LAVASPAWN)
 	new Skarcher(ID_SKARCHER)
@@ -151,6 +203,9 @@ class LavaMissile extends AbilityDefinitionIllidanChannel
 	new Indicator(ID_INDICATOR)
 	
 	new LavaMissile(ID_LAVAMISSILE)
+	new ManipulateItem(ID_MANIPULATE)
+
+	new Manipulatable(ID_LEGO)
 
 
 class BoolRef
@@ -176,12 +231,18 @@ function unit.hideish()
 		..pause()
 
 function unit.showish(vec2 where)
-	this..setXY(where)
+	this..setPos(where)
 		..setVertexColor(colorA(255, 255, 255, 255))
 		..setInvulnerable(false)
 		..unpause()
 
-let activeHeroes = new HashMap<player, SelectData>()
+function genBase(vec2 pos, color kolor)
+	addEffect(Buildings.circleOfPower1, pos)
+		..setColor(kolor)
+		..setScale(2.)
+	
+	for _i = 0 to 9
+		createItem(ID_LEGO, pos)
 
 init
 	redPlayers.forEach() (player t) ->
@@ -203,12 +264,8 @@ init
 			GetTriggerUnit()..revive(GetTriggerUnit().getOwner().getStartLocation(), true)
 		)
 
-	addEffect(Buildings.circleOfPower1, ZERO2.polarOffset(angle(5. * PI / 4),  2000.))
-		..setColor(color(100, 0, 0))
-		..setScale(2.)
-	addEffect(Buildings.circleOfPower1, ZERO2.polarOffset(angle(5. * PI / 4), -2000.))
-		..setColor(color(0, 100, 0))
-		..setScale(2.)
+	genBase(ZERO2.polarOffset(angle(5. * PI / 4),  2000.), color(100, 0, 0))
+	genBase(ZERO2.polarOffset(angle(5. * PI / 4), -2000.), color(0, 100, 0))
 
 	registerPlayerUnitEvent(EVENT_PLAYER_UNIT_SELECTED) ->
 		let u = GetTriggerUnit()
@@ -228,7 +285,9 @@ init
 					let pos = data.which.getPos()
 					let face = data.which.getFacingAngle()
 
-					data.which.hideish()
+					let old = data.which
+					data.which = u
+					old.hideish()
 
 					data.indicator.setHP(0.5)
 
@@ -241,6 +300,12 @@ init
 				else
 					p.selectSingle(data.which)
 					simError(p, "On cooldown (" + (10. + data.when - now).toString(1) + ")")
+
+	registerSpellEffectEvent(ID_MANIPULATE) ->
+		let caster = EventData.getTriggerUnit()
+		caster..setAnimation("spell")..queueAnimation("stand")
+
+		new Manipulate(caster, GetSpellTargetItem())
 
 	registerSpellEffectEvent(ID_LAVAMISSILE) ->
 		let caster = EventData.getTriggerUnit()
