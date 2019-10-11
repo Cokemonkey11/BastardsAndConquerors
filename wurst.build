@@ -4,6 +4,6 @@ dependencies:
 - https://github.com/wurstscript/wurstStdlib2
 - https://github.com/Cokemonkey11/WurstSimError
 buildMapData:
-  name: Bastards and Conquerors 0.1.0
-  fileName: (10)BastardsAndConquerors0.1.0
+  name: Bastards and Conquerors 0.1.1
+  fileName: (10)BastardsAndConquerors0.1.1
   author: Cokemonkey11

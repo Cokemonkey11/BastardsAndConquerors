@@ -8,6 +8,7 @@ import ClosureForGroups
 import GameTimer
 import HashMap
 import ItemObjEditing
+import Knockback3
 import LinkedListModule
 import ObjectIds
 import PlayerApi
@@ -25,6 +26,7 @@ constant ID_ARCHERMISSILE = 'Zarm'
 constant ID_MANIPULATE = 'Zmni'
 constant ID_FREEZE     = 'Zfrz'
 constant ID_UNSUMMON   = 'Zuns'
+constant ID_JUMPERINO  = 'Zjmp'
 
 constant ID_FLAG = 'flag'
 constant ID_LEGO = 'lego'
@@ -33,7 +35,7 @@ constant ID_WALL = 'wall'
 
 constant SAFE_LOC = vec2(-3585., 3585.)
 
-constant BASE_RADIUS = 128. + 16.
+constant BASE_RADIUS = 128. + 32.
 
 interface DestrIface
 	function check_destr(Missile m) returns bool
@@ -124,6 +126,7 @@ constant flag_provenence = new HashMap<item, effect>()
 
 constant red_base = genBase(ZERO2.polarOffset(angle(5. * PI / 4),  2000.), color(100, 0, 0))
 constant grn_base = genBase(ZERO2.polarOffset(angle(5. * PI / 4), -2000.), color(0, 100, 0))
+constant manipulatedes = new HashMap<item, unit>()
 
 class Manipulate
 	use LinkedListModule
@@ -136,6 +139,7 @@ class Manipulate
 
 	ondestroy
 		owner..removeAbility(ID_FREEZE)..addAbility(ID_MANIPULATE)
+		manipulatedes.remove(this.manipulated)
 
 	static function freeze(unit u)
 		let iter = staticItr()
@@ -160,6 +164,8 @@ class Manipulate
 		this.manipulated = manipulated
 		this.dist = owner.getPos().distanceTo(manipulated.getPos())
 		owner..removeAbility(ID_MANIPULATE)
+
+		manipulatedes.put(manipulated, owner)
 
 		if manipulated.getTypeId() != ID_FLAG
 			owner.addAbility(ID_FREEZE)
@@ -217,7 +223,7 @@ class LavaSpawn extends HeroDefinition
 		setHeroAbilities("")
 		setSightRadiusNight(1000)
 		setName("Executor")
-		setNormalAbilities(commaList(ID_LAVAMISSILE))
+		setNormalAbilities(commaList(ID_LAVAMISSILE, ID_JUMPERINO))
 		setAnimationCastBackswing(0.)
 		setAnimationCastPoint(0.)
 
@@ -269,7 +275,7 @@ class LavaMissile extends AbilityDefinitionIllidanChannel
 		presetTooltipNormal(int lvl -> "Loose Missile - " + "Q".colored(COLOR_GOLD))
 		presetTooltipNormalExtended(int lvl -> "Launch a projectile in the target direction, which deals damage on-hit.")
 		setIconNormal(Icons.bTNPoisonArrow)
-		presetCooldown(lvl int -> 2.5)
+		presetCooldown(int lvl -> 2.5)
 		setButtonPositionNormalX(0)
 		setButtonPositionNormalY(2)
 		setHotkeyNormal("Q")
@@ -279,6 +285,20 @@ class LavaMissile extends AbilityDefinitionIllidanChannel
 		setArtEffect("")
 		presetCastingTime(lvl -> 0.)
 
+class Jumperino extends LavaMissile
+	construct(int id)
+		super(id)
+		setOrderStringUseTurnOn("acidbomb")
+		presetBaseOrderID(int lvl -> "acidbomb")
+		setName("Jumperino")
+		presetTooltipNormal(int lvl -> "Jumperino - " + "W".colored(COLOR_GOLD))
+		presetTooltipNormalExtended(int lvl -> "Jump in the target direction for funsies.")
+		setIconNormal(Icons.bTNBootsOfSpeed)
+		presetCooldown(int lvl -> 7.)
+		setButtonPositionNormalX(1)
+		setHotkeyNormal("W")
+		presetCastRange(int lvl -> 400.)
+
 class ManipulateItem extends LavaMissile
 	construct(int id)
 		super(id)
@@ -287,7 +307,7 @@ class ManipulateItem extends LavaMissile
 		presetTooltipNormal(int lvl -> "Manipulate - " + "Q".colored(COLOR_GOLD))
 		presetTooltipNormalExtended(int lvl -> "Take control of a target item.")
 		setIconNormal(Icons.bTNGlove)
-		presetCastRange(int lvl -> 196.)
+		presetCastRange(int lvl -> 128. + 32.)
 		presetTargetsAllowed(leve -> "item")
 
 class Unsummon extends ManipulateItem
@@ -343,6 +363,7 @@ class Flag extends Manipulatable
 	new Manipulatable(ID_LEGO)
 	new FreezeItem(ID_FREEZE)
 	new Unsummon(ID_UNSUMMON)
+	new Jumperino(ID_JUMPERINO)
 
 	new Wall(ID_WALL)
 
@@ -418,7 +439,10 @@ init
 		if u.isType(UNIT_TYPE_HERO) and u.getOwner() == p
 			let data = activeHeroes.get(p)
 
-			if u != data.which
+			if u.getTypeId() == ID_INDICATOR
+				simError(p, "Lol no")
+				p.selectSingle(data.which)
+			else if u != data.which
 				let now = getElapsedGameTime()
 
 				if u.getTypeId() == ID_INDICATOR or not data.which.isAlive()
@@ -447,18 +471,29 @@ init
 
 	registerSpellEffectEvent(ID_MANIPULATE) ->
 		let caster = EventData.getTriggerUnit()
-		caster..setAnimation("spell")..queueAnimation("stand")
+		let ite = GetSpellTargetItem()
 
-		new Manipulate(caster, GetSpellTargetItem())
+		if manipulatedes.has(ite)
+			simError(caster.getOwner(), "Someone else is moving that")
+		else
+			caster..setAnimation("spell")..queueAnimation("stand")
+
+			new Manipulate(caster, ite)
 
 	registerSpellEffectEvent(ID_UNSUMMON) ->
 		new UnsummonChan(GetTriggerUnit(), GetSpellTargetUnit(), OrderId("acidbomb"))
+
+	registerSpellEffectEvent(ID_JUMPERINO) ->
+		Knockback3.add(GetTriggerUnit(), EventData.getSpellTargetPos(), 1000.)
 
 	registerSpellEffectEvent(ID_FREEZE) ->
 		let caster = EventData.getTriggerUnit()
 		caster..setAnimation("spell")..queueAnimation("stand")
 
 		Manipulate.freeze(caster)
+
+	registerPlayerEvent(EVENT_PLAYER_LEAVE) ->
+		print(GetTriggerPlayer().getNameColored() + " has left the game.  What a jerk!")
 
 	registerSpellEffectEvent(ID_LAVAMISSILE) ->
 		let caster = EventData.getTriggerUnit()
@@ -475,10 +510,10 @@ init
 		) m ->
 			let ref = new BoolRef(m.mdl.getPos3().z < 0.)
 
-			forUnitsInRange(m.mdl.getPos(), 64.) (unit u) ->
+			forUnitsInRange(m.mdl.getPos(), 96.) (unit u) ->
 				let neutral = u.getOwner() == Player(PLAYER_NEUTRAL_PASSIVE)
 
-				if u.isEnemyOf(m.owner) or neutral
+				if (u.isEnemyOf(m.owner) or neutral) and (m.mdl.getPos3() + vec3(0., 0., 10.)).distanceToSq(u.getPos3Fly() + vec3(0., 0., 50.)) < 96. * 96.
 					m.owner.damageTarget(u, neutral ? min(50., u.getHP() - 1) : 150.)
 					ref.val = true
 			
