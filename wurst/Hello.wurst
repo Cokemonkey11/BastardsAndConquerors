@@ -20,6 +20,8 @@ constant ID_SKARCHER  = 'Harc'
 constant ID_LMANIP    = 'Hlmn'
 constant ID_SKMANIP   = 'Hsmn'
 constant ID_INDICATOR = 'Hind'
+constant ID_LSORC     = 'Hlsc'
+constant ID_SKSORC    = 'Hssc'
 
 constant ID_LAVAMISSILE   = 'Zlvm'
 constant ID_ARCHERMISSILE = 'Zarm'
@@ -27,15 +29,22 @@ constant ID_MANIPULATE = 'Zmni'
 constant ID_FREEZE     = 'Zfrz'
 constant ID_UNSUMMON   = 'Zuns'
 constant ID_JUMPERINO  = 'Zjmp'
+constant ID_MOUNTAIN   = 'Zmtn'
 
 constant ID_FLAG = 'flag'
 constant ID_LEGO = 'lego'
 
-constant ID_WALL = 'wall'
+constant ID_WALL   = 'wall'
+constant ID_SKWALL = 'swll'
 
 constant SAFE_LOC = vec2(-3585., 3585.)
 
 constant BASE_RADIUS = 128. + 32.
+
+constant SWITCH_COOLDOWN = 7.
+
+function real.as_blackness() returns color
+	return color((this * 255).toInt(), (this * 255).toInt(), (this * 255).toInt())
 
 interface DestrIface
 	function check_destr(Missile m) returns bool
@@ -70,7 +79,10 @@ class Missile
 
 					missile.vel += missile.accel
 
-					missile.mdl.setPos(missile.mdl.getPos3() + missile.vel)
+					let old = missile.mdl.getPos3()
+					let nu  = old + missile.vel
+
+					missile.mdl..setPos(nu) // ..terrain_aware(old, nu)
 
 					if missile.des.check_destr(missile)
 						destroy missile
@@ -82,11 +94,13 @@ class UnsummonChan
 	use LinkedListModule
 
 	static constant clock = CreateTimer()
+	static constant nonces = new HashMap<player, int>()
 
 	unit owner
 	unit target
 	int order
 	effect fx
+	int nonce
 
 	ondestroy
 		this.fx.destr()
@@ -96,6 +110,9 @@ class UnsummonChan
 		this.target = target
 		this.order = order
 		this.fx = addEffect(Abilities.unsummonTarget, target.getPos())
+		this.nonce = nonces.has(owner.getOwner()) ? nonces.get(owner.getOwner()) + 1 : 0
+
+		nonces.put(owner.getOwner(), this.nonce)
 
 		if size == 1
 			clock.startPeriodic(ANIMATION_PERIOD) ->
@@ -114,19 +131,20 @@ class UnsummonChan
 					else
 						inst.target.subHP(tick)
 
-					if inst.target == null or inst.owner.getCurrentOrder() != inst.order
+					if inst.target == null or inst.owner.getCurrentOrder() != inst.order or inst.nonce != nonces.get(inst.owner.getOwner())
 						destroy inst
 
 				if size == 0
 					clock.pause()
 
 
-constant activeHeroes = new HashMap<player, SelectData>()
+constant active_heroes = new HashMap<player, SelectData>()
 constant flag_provenence = new HashMap<item, effect>()
 
 constant red_base = genBase(ZERO2.polarOffset(angle(5. * PI / 4),  2000.), color(100, 0, 0))
 constant grn_base = genBase(ZERO2.polarOffset(angle(5. * PI / 4), -2000.), color(0, 100, 0))
 constant manipulatedes = new HashMap<item, unit>()
+constant escapes = new HashMap<player, bool>()
 
 class Manipulate
 	use LinkedListModule
@@ -140,6 +158,7 @@ class Manipulate
 	ondestroy
 		owner..removeAbility(ID_FREEZE)..addAbility(ID_MANIPULATE)
 		manipulatedes.remove(this.manipulated)
+		escapes.put(this.owner.getOwner(), false)
 
 	static function freeze(unit u)
 		let iter = staticItr()
@@ -153,7 +172,7 @@ class Manipulate
 					simError(inst.owner.getOwner(), "Can't freeze there")
 				else
 					inst.manipulated.remove()
-					createUnit(Player(PLAYER_NEUTRAL_PASSIVE), ID_WALL, pos, angle(3. * PI / 2.))
+					createUnit(Player(PLAYER_NEUTRAL_PASSIVE), active_heroes.get(inst.owner.getOwner()).homebase == red_base ? ID_WALL : ID_SKWALL, pos, angle(3. * PI / 2.))
 					destroy inst
 
 		if size == 0
@@ -175,7 +194,7 @@ class Manipulate
 				let iter = staticItr()
 				while iter.hasNext()
 					let instance = iter.next()
-					let home = activeHeroes.get(instance.owner.getOwner()).homebase
+					let home = active_heroes.get(instance.owner.getOwner()).homebase
 
 					if (
 						instance.manipulated.getTypeId() == ID_FLAG
@@ -192,7 +211,12 @@ class Manipulate
 								RemovePlayer(p, PLAYER_GAME_RESULT_VICTORY)
 							EndGame(true)
 
-					else if not instance.manipulated.isAlive() or not instance.owner.isAlive() or activeHeroes.get(instance.owner.getOwner()).which != instance.owner
+					else if (
+						not instance.manipulated.isAlive()
+						or not instance.owner.isAlive()
+						or active_heroes.get(instance.owner.getOwner()).which != instance.owner
+						or escapes.get(instance.owner.getOwner())
+					)
 						destroy instance
 					else
 						instance.manipulated.setPos(
@@ -208,8 +232,14 @@ class Wall extends UnitDefinition
 		super(id, 'hmtt')
 		setAttacksEnabled(0)
 		setSpeedBase(0)
-		setModelFile(Buildings.towerDefenseTower)
+		setModelFile(Buildings.sacrificialAltar1)
 		setName("Wallerino")
+		setScalingValue(.8)
+
+class Skwall extends Wall
+	construct(int id)
+		super(id)
+		setModelFile(Buildings.nerubianZiggurat)
 
 class LavaSpawn extends HeroDefinition
 	construct(int id)
@@ -222,7 +252,7 @@ class LavaSpawn extends HeroDefinition
 		setProperNamesUsed(1)
 		setHeroAbilities("")
 		setSightRadiusNight(1000)
-		setName("Executor")
+		setName("Bastard")
 		setNormalAbilities(commaList(ID_LAVAMISSILE, ID_JUMPERINO))
 		setAnimationCastBackswing(0.)
 		setAnimationCastPoint(0.)
@@ -239,10 +269,10 @@ class Indicator extends LavaSpawn
 		super(id)
 		setModelFile("none.mdl")
 		setIconGameInterface(Icons.bTNWindWalkOff)
-		setHitPointsMaximumBase(100)
+		setHitPointsMaximumBase(1000)
 		setStrengthPerLevel(0)
 		setStartingStrength(0)
-		setHitPointsRegenerationRate(10.)
+		setHitPointsRegenerationRate(1000. / SWITCH_COOLDOWN)
 		setManaMaximum(0)
 		setIntelligencePerLevel(0)
 		setStartingIntelligence(0)
@@ -253,7 +283,7 @@ class LavaManipulator extends LavaSpawn
 		setModelFile(Units.demoness1)
 		setIconGameInterface(Icons.bTNDemoness)
 		setUnitSoundSet("Demoness")
-		setName("Manipulator")
+		setName("Conqueror")
 		setNormalAbilities(commaList(ID_MANIPULATE, ID_UNSUMMON))
 
 class SkeletonManipulator extends LavaManipulator
@@ -261,6 +291,22 @@ class SkeletonManipulator extends LavaManipulator
 		super(id)
 		setModelFile(Units.skeletonOrc1)
 		setIconGameInterface(Icons.bTNSkeletalOrcChampion)
+		setUnitSoundSet("Skeleton")
+
+class LavaSorcerer extends LavaSpawn
+	construct(int id)
+		super(id)
+		setModelFile(Units.eredarWarlock)
+		setIconGameInterface(Icons.bTNeredarRed)
+		setUnitSoundSet("PitLord")
+		setName("Elementalist")
+		setNormalAbilities(commaList(ID_MOUNTAIN))
+
+class SkeletonSorcerer extends LavaSorcerer
+	construct(int id)
+		super(id)
+		setModelFile(Units.skeletonMage1)
+		setIconGameInterface(Icons.bTNSkeletonMage)
 		setUnitSoundSet("Skeleton")
 
 class LavaMissile extends AbilityDefinitionIllidanChannel
@@ -285,6 +331,16 @@ class LavaMissile extends AbilityDefinitionIllidanChannel
 		setArtEffect("")
 		presetCastingTime(lvl -> 0.)
 
+class Mountain extends LavaMissile
+	construct(int id)
+		super(id)
+		setName("Mountain")
+		presetTooltipNormal(int lvl -> "Mountain - " + "Q".colored(COLOR_GOLD))
+		presetTooltipNormalExtended(int lvl -> "Builds a mountain range towards the target point.")
+		setIconNormal(Icons.bTNEarthquake)
+		presetCooldown(int lvl -> 9.)
+		presetCastRange(int lvl -> 1500.)
+
 class Jumperino extends LavaMissile
 	construct(int id)
 		super(id)
@@ -305,7 +361,7 @@ class ManipulateItem extends LavaMissile
 		presetTargetType(int lvl -> 1)  // Unit target.
 		setName("Manipulate")
 		presetTooltipNormal(int lvl -> "Manipulate - " + "Q".colored(COLOR_GOLD))
-		presetTooltipNormalExtended(int lvl -> "Take control of a target item.")
+		presetTooltipNormalExtended(int lvl -> "Take control of a target item.|n |n" + "Note:".colored(COLOR_GOLD) + " Press escape to drop the item.")
 		setIconNormal(Icons.bTNGlove)
 		presetCastRange(int lvl -> 128. + 32.)
 		presetTargetsAllowed(leve -> "item")
@@ -354,19 +410,23 @@ class Flag extends Manipulatable
 	new LavaManipulator(ID_LMANIP)
 	new SkeletonManipulator(ID_SKMANIP)
 
+	new LavaSorcerer(ID_LSORC)
+	new SkeletonSorcerer(ID_SKSORC)
+
 	new Indicator(ID_INDICATOR)
 	
 	new LavaMissile(ID_LAVAMISSILE)
 	new ManipulateItem(ID_MANIPULATE)
-
-	new Flag(ID_FLAG)
-	new Manipulatable(ID_LEGO)
 	new FreezeItem(ID_FREEZE)
 	new Unsummon(ID_UNSUMMON)
 	new Jumperino(ID_JUMPERINO)
+	new Mountain(ID_MOUNTAIN)
+
+	new Flag(ID_FLAG)
+	new Manipulatable(ID_LEGO)
 
 	new Wall(ID_WALL)
-
+	new Skwall(ID_SKWALL)
 
 class BoolRef
 	bool val
@@ -382,7 +442,7 @@ class SelectData
 
 	construct(unit which, unit indicator, effect homebase)
 		this.which = which
-		this.when = -10.
+		this.when = -1. * SWITCH_COOLDOWN
 		this.indicator = indicator
 		this.homebase = homebase
 
@@ -412,18 +472,34 @@ function genBase(vec2 pos, color kolor) returns effect
 
 init
 	SetTimeOfDayScale(0.)
+	FogMaskEnable(false)
+	EnableDragSelect(false, false)
+	EnablePreSelect(false, false)
+	EnableSelect(true, true)
 
 	red_players.forEach() (player t) ->
 		let u = createUnit(t, ID_LAVASPAWN, t.getStartLocation(), angle(3. * PI / 2.))
 		t.selectSingle(u)
 		createUnit(t, ID_LMANIP, ZERO2, angle(0.))..hideish()
-		activeHeroes.put(t, new SelectData(u, createUnit(t, ID_INDICATOR, ZERO2, angle(0.))..hideish(), red_base))
+		createUnit(t, ID_LSORC, ZERO2, angle(0.))..hideish()
+		active_heroes.put(t, new SelectData(u, createUnit(t, ID_INDICATOR, ZERO2, angle(0.))..hideish(), red_base))
+
+		createFogModifier(t, FOG_OF_WAR_VISIBLE, red_base.getPos(), 900., true, true)..start()
+		createFogModifier(t, FOG_OF_WAR_VISIBLE, grn_base.getPos(), 300., true, true)..start()
+
+		escapes.put(t, false)
 
 	green_players.forEach() (player t) ->
 		let u = createUnit(t, ID_SKARCHER, t.getStartLocation(), angle(3. * PI / 2.))
 		t.selectSingle(u)
 		createUnit(t, ID_SKMANIP, ZERO2, angle(0.))..hideish()
-		activeHeroes.put(t, new SelectData(u, createUnit(t, ID_INDICATOR, ZERO2, angle(0.))..hideish(), grn_base))
+		createUnit(t, ID_SKSORC, ZERO2, angle(0.))..hideish()
+		active_heroes.put(t, new SelectData(u, createUnit(t, ID_INDICATOR, ZERO2, angle(0.))..hideish(), grn_base))
+
+		createFogModifier(t, FOG_OF_WAR_VISIBLE, grn_base.getPos(), 900., true, true)..start()
+		createFogModifier(t, FOG_OF_WAR_VISIBLE, red_base.getPos(), 300., true, true)..start()
+
+		escapes.put(t, false)
 
 	StopMusic(false)
 
@@ -437,9 +513,9 @@ init
 		let p = GetTriggerPlayer()
 
 		if u.isType(UNIT_TYPE_HERO) and u.getOwner() == p
-			let data = activeHeroes.get(p)
+			let data = active_heroes.get(p)
 
-			if u.getTypeId() == ID_INDICATOR
+			if u.getTypeId() == ID_INDICATOR or not data.which.isAlive()
 				simError(p, "Lol no")
 				p.selectSingle(data.which)
 			else if u != data.which
@@ -448,7 +524,7 @@ init
 				if u.getTypeId() == ID_INDICATOR or not data.which.isAlive()
 					p.selectSingle(data.which)
 
-				if now > data.when + 10.
+				if now > data.when + SWITCH_COOLDOWN
 					p.selectSingle(u)
 					let pos = data.which.getPos()
 					let face = data.which.getFacingAngle()
@@ -467,7 +543,9 @@ init
 					flashEffect(Abilities.charmTarget, pos)
 				else
 					p.selectSingle(data.which)
-					simError(p, "On cooldown (" + (10. + data.when - now).toString(1) + ")")
+					simError(p, "On cooldown (" + (SWITCH_COOLDOWN + data.when - now).toString(1) + ")")
+		else
+			p.selectSingle(active_heroes.get(p).which)
 
 	registerSpellEffectEvent(ID_MANIPULATE) ->
 		let caster = EventData.getTriggerUnit()
@@ -475,6 +553,12 @@ init
 
 		if manipulatedes.has(ite)
 			simError(caster.getOwner(), "Someone else is moving that")
+		else if active_heroes.get(caster.getOwner()).homebase == flag_provenence.get(ite)
+			let dist_sq = ite.getPos().distanceToSq(flag_provenence.get(ite).getPos())
+			ite.setPos(flag_provenence.get(ite).getPos())
+
+			if dist_sq > BASE_RADIUS * BASE_RADIUS
+				print(caster.getOwner().getNameColored() + " returned their flag.")
 		else
 			caster..setAnimation("spell")..queueAnimation("stand")
 
@@ -495,26 +579,53 @@ init
 	registerPlayerEvent(EVENT_PLAYER_LEAVE) ->
 		print(GetTriggerPlayer().getNameColored() + " has left the game.  What a jerk!")
 
+	registerPlayerEvent(EVENT_PLAYER_END_CINEMATIC) ->
+		escapes.put(GetTriggerPlayer(), true)
+		doAfter(2. * ANIMATION_PERIOD) ->
+			escapes.put(GetTriggerPlayer(), false)
+
+	registerSpellEffectEvent(ID_MOUNTAIN) ->
+		let cast_pos = GetTriggerUnit().getPos()
+		let ang = cast_pos.angleTo(EventData.getSpellTargetPos())
+		
+		for i = 1 to 4
+			let pos = cast_pos.polarOffset(ang, i * 300.)
+			let z = pos.getTerrainZ()
+
+			if pos.distanceToSq(red_base.getPos()) > (128. + 64.) * (128. + 64.) + BASE_RADIUS * BASE_RADIUS and z < 190.
+				TerrainDeformCrater(pos.x, pos.y, z < 100. ? 256. : 192., z < 100. ? -100. : -50., 500, true)
+			else
+				flashEffect(Abilities.thunderclapCaster, pos)
+
+
 	registerSpellEffectEvent(ID_LAVAMISSILE) ->
 		let caster = EventData.getTriggerUnit()
 
 		caster.setAnimation(UnitAnimations.LavaSpawn.attack.idx)
 		caster.queueAnimation("stand")
 
+		let targ = EventData.getSpellTargetPos()
+
+		let ang = caster.getPos().angleTo(targ)
+
 		new Missile(
 			caster,
 			Abilities.lavaSpawnMissile,
-			caster.getPos3with(60.).offset2d(caster.getFacingAngle(), 50.),
-			ANIMATION_PERIOD * 1400. * caster.getPos().normalizedPointerTo(EventData.getSpellTargetPos()).toVec3(),
+			caster.getPos3Real() + vec3(0., 0., 60.).offset2d(ang, 50.),
+			ANIMATION_PERIOD * 1400. * caster.getPos3Real().normalizedPointerTo(targ.withTerrainZ()),
 			vec3(0., 0., -0.2)
 		) m ->
-			let ref = new BoolRef(m.mdl.getPos3().z < 0.)
+			let ref = new BoolRef(m.mdl.getPos3().z - m.mdl.getPos().getTerrainZ() < 0.)
 
 			forUnitsInRange(m.mdl.getPos(), 96.) (unit u) ->
 				let neutral = u.getOwner() == Player(PLAYER_NEUTRAL_PASSIVE)
 
 				if (u.isEnemyOf(m.owner) or neutral) and (m.mdl.getPos3() + vec3(0., 0., 10.)).distanceToSq(u.getPos3Fly() + vec3(0., 0., 50.)) < 96. * 96.
-					m.owner.damageTarget(u, neutral ? min(50., u.getHP() - 1) : 150.)
+					if neutral
+						m.owner.damageTarget(u, min(50., u.getHP() - 1))
+						u.setVertexColor((u.getHP() / u.getMaxHP()).as_blackness())
+					else
+						m.owner.damageTarget(u, 150.)
 					ref.val = true
 			
 			let result = ref.val
