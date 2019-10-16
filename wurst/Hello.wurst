@@ -9,10 +9,12 @@ import GameTimer
 import HashMap
 import ItemObjEditing
 import Knockback3
+import LinkedList
 import LinkedListModule
 import ObjectIds
 import PlayerApi
 import UnitAnimations
+import WurstQuadTree
 import WurstSimError
 
 constant ID_LAVASPAWN = 'Hlsp'
@@ -82,7 +84,7 @@ class Missile
 					let old = missile.mdl.getPos3()
 					let nu  = old + missile.vel
 
-					missile.mdl..setPos(nu) // ..terrain_aware(old, nu)
+					missile.mdl..setPos(nu)
 
 					if missile.des.check_destr(missile)
 						destroy missile
@@ -434,6 +436,12 @@ class BoolRef
 	construct(bool val)
 		this.val = val
 
+class RealRef
+	real val
+
+	construct(real val)
+		this.val = val
+
 class SelectData
 	unit which
 	real when
@@ -469,6 +477,34 @@ function genBase(vec2 pos, color kolor) returns effect
 	flag_provenence.put(createItem(ID_FLAG, pos), fx)
 
 	return fx
+
+class MountainDeformation
+	terraindeformation which
+	real rad
+	real height
+	int duration
+
+	ondestroy
+		TerrainDeformStop(this.which, this.duration)
+
+	construct(vec2 where, real rad, real height, real create_duration_secs)
+		this.duration = (create_duration_secs * 1000.).toInt()
+		this.which = TerrainDeformCrater(where.x, where.y, rad, -1 * height, this.duration, true)
+		this.rad = rad
+		this.height = height
+
+let deformations = new QuadTree<MountainDeformation>()
+
+public function getMountainDeformationHeight(vec2 frm) returns real
+	let height_ref = new RealRef(0.)
+	deformations.for_each(frm, 256.) (vec2 where, MountainDeformation t) ->
+		let distSq = where.distanceToSq(frm)
+		if distSq < t.rad * t.rad
+			height_ref.val += Cos(PIHALF * SquareRoot(distSq) / t.rad) * t.height
+
+	let v = height_ref.val
+	destroy height_ref
+	return v
 
 init
 	SetTimeOfDayScale(0.)
@@ -590,10 +626,10 @@ init
 		
 		for i = 1 to 4
 			let pos = cast_pos.polarOffset(ang, i * 300.)
-			let z = pos.getTerrainZ()
+			let z = getMountainDeformationHeight(pos)
 
 			if pos.distanceToSq(red_base.getPos()) > (128. + 64.) * (128. + 64.) + BASE_RADIUS * BASE_RADIUS and z < 190.
-				TerrainDeformCrater(pos.x, pos.y, z < 100. ? 256. : 192., z < 100. ? -100. : -50., 500, true)
+				deformations.put(pos, new MountainDeformation(pos, z < 100. ? 256. : 192., z < 100. ? 100. : 50., .5))
 			else
 				flashEffect(Abilities.thunderclapCaster, pos)
 
@@ -608,27 +644,34 @@ init
 
 		let ang = caster.getPos().angleTo(targ)
 
+		let casterHeight = getMountainDeformationHeight(caster.getPos())
+
 		new Missile(
 			caster,
 			Abilities.lavaSpawnMissile,
-			caster.getPos3Real() + vec3(0., 0., 60.).offset2d(ang, 50.),
-			ANIMATION_PERIOD * 1400. * caster.getPos3Real().normalizedPointerTo(targ.withTerrainZ()),
+			caster.getPos3Fly() + vec3(0., 0., 60. + casterHeight).offset2d(ang, 50.),
+			ANIMATION_PERIOD * 1400. * caster.getPos().withZ(casterHeight).normalizedPointerTo(targ.withZ(50. + getMountainDeformationHeight(targ))),
 			vec3(0., 0., -0.2)
 		) m ->
-			let ref = new BoolRef(m.mdl.getPos3().z - m.mdl.getPos().getTerrainZ() < 0.)
+			let height = getMountainDeformationHeight(m.mdl.getPos())
+
+			let hit_ref = new BoolRef(m.mdl.getPos3().z - height < 0.)
 
 			forUnitsInRange(m.mdl.getPos(), 96.) (unit u) ->
 				let neutral = u.getOwner() == Player(PLAYER_NEUTRAL_PASSIVE)
 
-				if (u.isEnemyOf(m.owner) or neutral) and (m.mdl.getPos3() + vec3(0., 0., 10.)).distanceToSq(u.getPos3Fly() + vec3(0., 0., 50.)) < 96. * 96.
+				if (
+					(u.isEnemyOf(m.owner) or neutral)
+					and (m.mdl.getPos3() + vec3(0., 0., 10.)).distanceToSq(u.getPos3Fly() + vec3(0., 0., 50. + height)) < 96. * 96.
+				)
 					if neutral
 						m.owner.damageTarget(u, min(50., u.getHP() - 1))
 						u.setVertexColor((u.getHP() / u.getMaxHP()).as_blackness())
 					else
 						m.owner.damageTarget(u, 150.)
-					ref.val = true
+					hit_ref.val = true
 			
-			let result = ref.val
-			destroy ref
+			let result = hit_ref.val
+			destroy hit_ref
 
 			return result

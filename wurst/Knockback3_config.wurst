@@ -1,0 +1,6 @@
+package Knockback3_config
+
+import Knockback3
+import Hello
+
+@config TerrainZProvider HEIGHTMAP_PROVIDER = (vec3 w) -> getMountainDeformationHeight(w.toVec2())

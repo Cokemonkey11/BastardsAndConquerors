@@ -7,13 +7,9 @@ Issues:
 - [x] F3 hero is selectable - bug - still a bug?
 - [x] Visibility is frustrating
 - [x] There is no ability to perfm a "drop" during Manipulate
-- [x] Jump spell
 - [x] Opponents should be unselectable/reselect main hero periodically
 - [x] Terrain manipulator hero
 - [ ] Caster hero
-- [x] Spawn points are messed up
-- [x] Force 1 Force 2
-- [x] Random skeleton spawning in ZERO2? maybe off-by-one error on players iterator
 - [x] Manipulating own flag should just send it back
 - [x] After dying you can simply F2, lol
 - [x] Unsummon can double-tap - needs nonce
@@ -22,5 +18,12 @@ Issues:
 - [x] Lava missile does not respect target terrainz
 - [ ] No way to make a valley or otherwise reverse a mountain
 - [ ] no way to repair
-- [ ] reworked cooldown system using pools
+- [ ] rework cooldown system using pools
 - [ ] Skeleton arrow too
+- [x] desync from mountain manipulator
+    * [x] Knockback3::tickAboveGround x 2
+    * [x] vec2::withRealZ
+    * [x] vec2::withTerrainZ
+    * [x] new BoolRef
+    * [x] ID_MOUNTAIN -> z = pos.getTerrainZ
+    * [ ] publish Knockback3 configurable
